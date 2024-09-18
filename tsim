@@ -1,19 +1,19 @@
 import sys
+import random
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
     QPlainTextEdit, QPushButton, QTableWidget, QTableWidgetItem,
-    QMessageBox, QMenu, QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QComboBox, QLabel
+    QMessageBox, QMenu, QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QComboBox, QLabel, QScrollArea, QListWidget
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QPoint
 
 
 # Mock function to simulate SQL query execution with a large dataset
 def execute_sql_query(query):
-    # Generate a large dataset with many columns
     num_columns = 50  # Simulate 50 columns
     columns = [f'Column_{i}' for i in range(1, num_columns + 1)]
     results = [
-        tuple(f'Data_{i}_{j}' for j in range(num_columns)) for i in range(1, 1001)  # 1000 rows of data
+        tuple(random.randint(1, 10) for _ in range(num_columns)) for _ in range(1, 1001)  # 1000 rows of data
     ]
     if "error" in query.lower():
         return None, "Mock error: Invalid SQL query."
@@ -32,15 +32,29 @@ class PreviewDialog(QDialog):
         column_label = QLabel(f"Modifying Column: '{column_name}'")
         layout.addWidget(column_label)
 
+        # Create a scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+
         # Display modifications
         for row_index, old_value, new_value in modifications:
             label = QLabel(f"Row {row_index + 1}: Column Value changed from '{old_value}' to '{new_value}'")
-            layout.addWidget(label)
+            scroll_layout.addWidget(label)
 
+        scroll_content.setLayout(scroll_layout)
+        scroll_area.setWidget(scroll_content)
+        layout.addWidget(scroll_area)
+
+        # Buttons for accept and cancel
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
+
+
+from PyQt6.QtWidgets import QMessageBox
 
 
 class ModifyDialog(QDialog):
@@ -54,15 +68,18 @@ class ModifyDialog(QDialog):
 
         self.form_layout = QFormLayout()
 
-        # Dropdown to select which column to modify
-        self.column_selector = QComboBox()
-        self.column_selector.addItems(columns)
-        self.column_selector.currentIndexChanged.connect(self.update_column_data)
-        self.form_layout.addRow("Select Column:", self.column_selector)
+        # Create a label to show the selected column
+        self.selected_column_label = QLabel(f"Current Column: '{self.column_to_modify}'")
+        self.form_layout.addRow("Select Column:", self.selected_column_label)
+
+        # Create a button to select the column
+        self.column_button = QPushButton("Select Column")
+        self.column_button.clicked.connect(self.show_column_selector)
+        self.form_layout.addRow("", self.column_button)
 
         # Form field for column data
         self.line_edit = QLineEdit()
-        self.form_layout.addRow(f"New Value for '{self.column_to_modify}':", self.line_edit)
+        self.form_layout.addRow(f"New Value for Column:", self.line_edit)
         self.update_column_data()  # Initialize with the default column's data
 
         # Buttons for accept and cancel
@@ -75,10 +92,17 @@ class ModifyDialog(QDialog):
         self.layout.addWidget(self.buttons)
         self.setLayout(self.layout)
 
+    def show_column_selector(self):
+        column_selector_dialog = ColumnSelectorDialog(self.columns, self)
+        if column_selector_dialog.exec() == QDialog.DialogCode.Accepted:
+            self.column_to_modify = column_selector_dialog.selected_column
+            self.selected_column_label.setText(f"Current Column: '{self.column_to_modify}'")  # Update the label
+            self.update_column_data()
+
     def update_column_data(self):
         # Update the form field with the data for the selected column
-        self.column_to_modify = self.column_selector.currentText()
-        values = [self.parent().result_table.item(row, self.columns.index(self.column_to_modify)).text()
+        column_index = self.columns.index(self.column_to_modify)
+        values = [self.parent().result_table.item(row, column_index).text()
                   for row in self.selected_rows]
         if values:
             self.line_edit.setText(values[0])  # Default to the value of the first selected row
@@ -96,7 +120,44 @@ class ModifyDialog(QDialog):
             # Notify the main window to apply changes
             if hasattr(self.parent(), 'apply_modifications'):
                 self.parent().apply_modifications(self.column_to_modify, modifications)
+
+            # Show success message
+            QMessageBox.information(self, "Success", "The selected rows have been modified successfully!")
             self.accept()
+
+
+class ColumnSelectorDialog(QDialog):
+    def __init__(self, columns, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Column")
+        self.setFixedSize(300, 400)
+
+        layout = QVBoxLayout()
+
+        # Create a list widget to show columns
+        self.list_widget = QListWidget()
+        self.list_widget.addItems(columns)
+        self.list_widget.itemClicked.connect(self.select_column)
+
+        # Add a scroll area for the list
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(self.list_widget)
+
+        layout.addWidget(scroll_area)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+
+        layout.addWidget(self.buttons)
+        self.setLayout(layout)
+
+        self.selected_column = None
+
+    def select_column(self, item):
+        self.selected_column = item.text()
+
 
 
 class SQLQueryExecutor(QMainWindow):
@@ -104,24 +165,32 @@ class SQLQueryExecutor(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("SQL Query Executor")
-        self.setGeometry(100, 100, 1200, 600)  # Increased width for more columns
+        self.setGeometry(100, 100, 1200, 600)
 
-        # Central widget and layout
         central_widget = QWidget()
         layout = QVBoxLayout()
         central_widget.setLayout(layout)
         self.setCentralWidget(central_widget)
 
-        # SQL Query Input
+        self.preloaded_queries = {
+            "Get All Users": "SELECT * FROM users;",
+            "Get Employee Names and Ages": "SELECT name, age FROM employees;",
+            "Expensive Products": "SELECT * FROM products WHERE price > 100;",
+            "Count Orders": "SELECT COUNT(*) FROM orders;"
+        }
+
+        self.query_selector = QComboBox()
+        self.query_selector.addItems(self.preloaded_queries.keys())
+        self.query_selector.currentIndexChanged.connect(self.populate_query_input)
+        layout.addWidget(self.query_selector)
+
         query_layout = QHBoxLayout()
         self.query_input = QPlainTextEdit()
         self.query_input.setPlaceholderText("Enter your SQL query here...")
-        self.query_input.setFixedHeight(100)  # Set the height to fit approximately 3 lines of text
-        self.query_input.setStyleSheet(
-            "background-color: lightblue; color: black;")  # Shade it in light blue and set text color to black
+        self.query_input.setFixedHeight(100)
+        self.query_input.setStyleSheet("background-color: lightblue; color: black;")
         query_layout.addWidget(self.query_input)
 
-        # Buttons
         button_layout = QVBoxLayout()
         execute_button = QPushButton("Execute Query")
         execute_button.clicked.connect(self.handle_query_execution)
@@ -134,18 +203,12 @@ class SQLQueryExecutor(QMainWindow):
         query_layout.addLayout(button_layout)
         layout.addLayout(query_layout)
 
-        # Table Widget for displaying results
         self.result_table = QTableWidget()
-        self.result_table.setSelectionMode(QTableWidget.SelectionMode.MultiSelection)  # Enable multi-row selection
-        self.result_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)  # Select entire rows
+        self.result_table.setSelectionMode(QTableWidget.SelectionMode.MultiSelection)
+        self.result_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.result_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.result_table.customContextMenuRequested.connect(self.show_context_menu)
 
-        # Apply custom styling
-        # Set background color of data cells to white
-        # Set color of lines between data cells to grey
-        # Set background color of column headers to grey
-        # Set background color of row index labels to grey
         self.result_table.setStyleSheet("""
                            QTableWidget {
                                background-color: white;
@@ -164,6 +227,61 @@ class SQLQueryExecutor(QMainWindow):
 
         layout.addWidget(self.result_table)
 
+        # Connect header click event
+        self.result_table.horizontalHeader().sectionClicked.connect(self.handle_header_click)
+
+    def handle_header_click(self, logical_index):
+        column_name = self.result_table.horizontalHeaderItem(logical_index).text()
+        unique_values = self.get_unique_values(logical_index)
+        self.show_unique_values_menu(unique_values, logical_index)
+
+    def get_unique_values(self, column_index):
+        values = set()
+        for row in range(self.result_table.rowCount()):
+            item = self.result_table.item(row, column_index)
+            if item:
+                values.add(item.text())
+        return list(values)
+
+    def show_unique_values_menu(self, unique_values, column_index):
+        context_menu = QMenu(self)
+
+        # Add an action to show all values
+        show_all_action = context_menu.addAction("Show All Values")
+        show_all_action.triggered.connect(lambda: self.show_all_rows())
+
+        # Sort the unique values
+        unique_values.sort()
+
+        for value in unique_values:
+            action = context_menu.addAction(value)
+            action.triggered.connect(lambda checked, val=value: self.filter_rows(column_index, val))
+
+        # Increase the size of the menu
+        context_menu.setStyleSheet("QMenu { font-size: 12pt; min-width: 200px; }")
+
+        context_menu.exec(self.result_table.viewport().mapToGlobal(self.result_table.mapToGlobal(QPoint(0, 0))))
+
+    def show_all_rows(self):
+        for row in range(self.result_table.rowCount()):
+            self.result_table.showRow(row)
+
+    def filter_rows(self, column_index, value):
+        for row in range(self.result_table.rowCount()):
+            item = self.result_table.item(row, column_index)
+            if item and item.text() != value:
+                self.result_table.hideRow(row)
+            else:
+                self.result_table.showRow(row)
+
+
+
+
+    def populate_query_input(self):
+        selected_name = self.query_selector.currentText()
+        selected_query = self.preloaded_queries[selected_name]
+        self.query_input.setPlainText(selected_query)
+
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
             self.result_table.clearSelection()
@@ -177,11 +295,10 @@ class SQLQueryExecutor(QMainWindow):
 
         columns, results_or_error = execute_sql_query(query)
 
-        if isinstance(results_or_error, str):  # Error occurred
+        if isinstance(results_or_error, str):
             QMessageBox.critical(self, "Query Error", f"An error occurred: {results_or_error}")
             return
 
-        # Update table widget with new data
         self.result_table.setRowCount(len(results_or_error))
         self.result_table.setColumnCount(len(columns))
         self.result_table.setHorizontalHeaderLabels(columns)
@@ -196,13 +313,46 @@ class SQLQueryExecutor(QMainWindow):
 
     def show_context_menu(self, pos):
         context_menu = QMenu(self)
-
-        # Create a custom menu item for modifying the rows
         modify_action = context_menu.addAction("Modify Column")
         modify_action.triggered.connect(self.modify_selected_rows)
 
-        # Display the context menu at the requested position
+        # Add the new "Print to File" action
+        print_action = context_menu.addAction("Print Selected Rows to File")
+        print_action.triggered.connect(self.print_selected_rows_to_file)
+
         context_menu.exec(self.result_table.viewport().mapToGlobal(pos))
+
+    def print_selected_rows_to_file(self):
+        selected_items = self.result_table.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "Selection Error", "No rows selected.")
+            return
+
+        selected_rows = sorted(set(item.row() for item in selected_items))
+
+        # Get the data for the selected rows
+        rows_data = []
+        for row in selected_rows:
+            row_data = [self.result_table.item(row, col).text() for col in range(self.result_table.columnCount())]
+            rows_data.append(row_data)
+
+        # Specify the filename (you could use a dialog to let the user choose)
+        filename = "selected_rows.txt"
+
+        try:
+            with open(filename, 'w') as f:
+                # Write column headers
+                headers = [self.result_table.horizontalHeaderItem(col).text() for col in
+                           range(self.result_table.columnCount())]
+                f.write("\t".join(headers) + "\n")  # Write headers
+
+                # Write selected rows
+                for row in rows_data:
+                    f.write("\t".join(row) + "\n")  # Tab-separated values
+
+            QMessageBox.information(self, "Success", f"Selected rows have been printed to '{filename}'.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"An error occurred while writing to file: {e}")
 
     def modify_selected_rows(self):
         selected_items = self.result_table.selectedItems()
@@ -210,33 +360,27 @@ class SQLQueryExecutor(QMainWindow):
             QMessageBox.warning(self, "Selection Error", "No rows selected.")
             return
 
-        # Get unique rows
         selected_rows = set(item.row() for item in selected_items)
         if not selected_rows:
             QMessageBox.warning(self, "Selection Error", "No rows selected.")
             return
 
-        # Retrieve data from selected rows
         row_data_list = [
             tuple(self.result_table.item(row, col).text() for col in range(self.result_table.columnCount())) for row in
             selected_rows]
         columns = [self.result_table.horizontalHeaderItem(col).text() for col in range(self.result_table.columnCount())]
 
-        # Show the modify dialog
         dialog = ModifyDialog(selected_rows, columns, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            # No need to handle modifications here, it will be handled in the ModifyDialog's `handle_ok` method
             pass
 
     def apply_modifications(self, column_name, modifications):
-        # Apply the modifications to the result table
         column_index = [self.result_table.horizontalHeaderItem(col).text() for col in
                         range(self.result_table.columnCount())].index(column_name)
         for row_idx, old_value, new_value in modifications:
             self.result_table.item(row_idx, column_index).setText(new_value)
 
 
-# Main entry point
 def main():
     app = QApplication(sys.argv)
     window = SQLQueryExecutor()
@@ -246,5 +390,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
