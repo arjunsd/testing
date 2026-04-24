@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live iNav Chart</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: #0f0f13; color: #e0e0e0;
+    font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+
+  header {
+    padding: 10px 16px; display: flex; align-items: center;
+    gap: 10px; flex-wrap: wrap;
+    background: #16161d; border-bottom: 1px solid #2a2a3a;
+  }
+  header h1 { font-size: 14px; font-weight: 600; color: #b8b8c8; letter-spacing: 0.02em; }
+
+  button {
+    background: #2563eb; color: white; border: none;
+    padding: 6px 14px; border-radius: 6px;
+    cursor: pointer; font-size: 13px; font-weight: 500;
+  }
+  button:hover:not(:disabled) { background: #1d4ed8; }
+  button:disabled { background: #374151; cursor: default; opacity: 0.6; }
+
+  label { font-size: 12px; color: #8a8a9a; }
+  select {
+    background: #1e1e2a; color: #c8c8d8;
+    border: 1px solid #3a3a4a;
+    padding: 5px 8px; border-radius: 5px; font-size: 12px;
+    font-family: inherit;
+  }
+  select:focus, input:focus { outline: 1px solid #2563eb; }
+
+  input[type="text"], input[type="number"] {
+    background: #1e1e2a; color: #c8c8d8;
+    border: 1px solid #3a3a4a;
+    padding: 5px 8px; border-radius: 5px; font-size: 12px;
+    font-family: inherit; width: 100px;
+  }
+  input[type="number"] { width: 80px; }
+  input::placeholder { color: #50505a; }
+
+  button.secondary {
+    background: #3a3a4a;
+  }
+  button.secondary:hover:not(:disabled) { background: #4a4a5a; }
+
+  .chart-wrapper { cursor: grab; }
+  .chart-wrapper:active { cursor: grabbing; }
+
+  .sep { width: 1px; height: 22px; background: #2a2a3a; }
+
+  .status {
+    font-size: 12px; color: #22c55e; margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+  .status.error { color: #ef4444; }
+  .status.waiting { color: #f59e0b; }
+
+  .stats {
+    display: flex; gap: 28px; padding: 10px 16px;
+    background: #13131a; border-bottom: 1px solid #2a2a3a;
+    flex-wrap: wrap;
+  }
+  .stat { display: flex; flex-direction: column; gap: 2px; }
+  .stat-label {
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.08em; color: #5a5a6a; font-weight: 600;
+  }
+  .stat-value {
+    font-size: 15px; font-weight: 600; color: #c8c8d8;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-value.pos { color: #22c55e; }
+  .stat-value.neg { color: #ef4444; }
+
+  .chart-wrapper {
+    flex: 1; padding: 12px; min-height: 0;
+    position: relative;
+  }
+
+  .empty-state {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #50505a; font-size: 14px; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Live iNav Chart</h1>
+  <div class="sep"></div>
+  <button id="openBtn">Open CSV</button>
+  <div class="sep"></div>
+  <label>X:</label>
+  <select id="xCol"><option>—</option></select>
+  <label>Y:</label>
+  <select id="yCol"><option>—</option></select>
+  <div class="sep"></div>
+  <label>Refresh:</label>
+  <select id="interval">
+    <option value="5000" selected>5s</option>
+    <option value="15000">15s</option>
+    <option value="30000">30s</option>
+    <option value="60000">1m</option>
+    <option value="300000">5m</option>
+  </select>
+  <span id="status" class="status waiting">No file loaded</span>
+</header>
+
+<header>
+  <label>X from:</label>
+  <input type="text" id="xStart" placeholder="first value">
+  <label>X to:</label>
+  <input type="text" id="xEnd" placeholder="last value">
+  <div class="sep"></div>
+  <label>Y min:</label>
+  <input type="number" id="yMin" step="any" placeholder="auto">
+  <label>Y max:</label>
+  <input type="number" id="yMax" step="any" placeholder="auto">
+  <div class="sep"></div>
+  <button id="resetBtn" class="secondary">Reset View</button>
+  <span style="font-size: 11px; color: #606070; margin-left: auto;">
+    scroll to zoom · drag to pan
+  </span>
+</header>
+
+<div class="stats">
+  <div class="stat"><span class="stat-label">Current</span><span class="stat-value" id="stat-current">—</span></div>
+  <div class="stat"><span class="stat-label">Last Updated</span><span class="stat-value" id="stat-time">—</span></div>
+</div>
+
+<div class="chart-wrapper">
+  <canvas id="chart"></canvas>
+  <div class="empty-state" id="empty">Click "Open CSV" to begin.</div>
+</div>
+
+<script>
+  // ─────────── state ───────────
+  let fileHandle = null;
+  let lastContent = null;
+  let pollTimer = null;
+  let chart = null;
+  let headers = [];
+  let allRows = [];     // full parsed rows (strings), kept for hover-tooltip
+  let xColIdx = 0;
+  let yColIdx = 1;
+
+  // ─────────── indexeddb (persist the picked file handle) ───────────
+  const IDB_NAME = 'live-csv-chart';
+  const IDB_STORE = 'handles';
+  const IDB_KEY = 'lastFile';
+
+  function idbOpen() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function idbSet(val) {
+    const db = await idbOpen();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(val, IDB_KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+  async function idbGet() {
+    const db = await idbOpen();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const req = tx.objectStore(IDB_STORE).get(IDB_KEY);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  // ─────────── dom ───────────
+  const $ = (id) => document.getElementById(id);
+  const openBtn = $('openBtn');
+  const statusEl = $('status');
+  const intervalSel = $('interval');
+  const xColSel = $('xCol');
+  const yColSel = $('yCol');
+  const emptyEl = $('empty');
+  const xStartEl = $('xStart');
+  const xEndEl = $('xEnd');
+  const yMinEl = $('yMin');
+  const yMaxEl = $('yMax');
+  const resetBtn = $('resetBtn');
+
+  // ─────────── persist user-entered limits + column picks via localStorage ───────────
+  const LIMITS_KEY = 'live-csv-chart:limits';
+  let savedXColName = null;   // column names, restored across reloads
+  let savedYColName = null;
+  function savePrefs() {
+    try {
+      localStorage.setItem(LIMITS_KEY, JSON.stringify({
+        xStart: xStartEl.value,
+        xEnd: xEndEl.value,
+        yMin: yMinEl.value,
+        yMax: yMaxEl.value,
+        xCol: headers[xColIdx] ?? savedXColName,
+        yCol: headers[yColIdx] ?? savedYColName,
+      }));
+    } catch { /* ignore */ }
+  }
+  function loadPrefs() {
+    try {
+      const raw = localStorage.getItem(LIMITS_KEY);
+      if (!raw) return;
+      const v = JSON.parse(raw);
+      if (v.xStart != null) xStartEl.value = v.xStart;
+      if (v.xEnd   != null) xEndEl.value   = v.xEnd;
+      if (v.yMin   != null) yMinEl.value   = v.yMin;
+      if (v.yMax   != null) yMaxEl.value   = v.yMax;
+      if (v.xCol   != null) savedXColName  = v.xCol;
+      if (v.yCol   != null) savedYColName  = v.yCol;
+    } catch { /* ignore */ }
+  }
+  loadPrefs();
+
+  // ─────────── browser support ───────────
+  if (!window.showOpenFilePicker) {
+    statusEl.textContent = 'File System Access API not supported — use Chrome or Edge';
+    statusEl.className = 'status error';
+    openBtn.disabled = true;
+  }
+
+  // ─────────── events ───────────
+  async function pickFile() {
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        types: [{
+          description: 'CSV / TSV files',
+          accept: { 'text/csv': ['.csv', '.tsv', '.txt'] }
+        }]
+      });
+      await setFileHandle(handle);
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        statusEl.textContent = 'Error: ' + e.message;
+        statusEl.className = 'status error';
+      }
+    }
+  }
+  openBtn.addEventListener('click', pickFile);
+
+  intervalSel.addEventListener('change', () => { if (fileHandle) startPolling(); });
+
+  function applyConfiguredLimits() {
+    if (!chart) return;
+    // Clear any active pan/zoom FIRST, then apply our options (otherwise
+    // resetZoom would overwrite the just-set options with the "original" state).
+    if (chart.resetZoom) chart.resetZoom('none');
+
+    const xs = xStartEl.value.trim();
+    const xe = xEndEl.value.trim();
+    const ymin = parseFloat(yMinEl.value);
+    const ymax = parseFloat(yMaxEl.value);
+    const xOpts = chart.options.scales.x;
+    const yOpts = chart.options.scales.y;
+
+    if (xs === '') delete xOpts.min; else xOpts.min = xs;
+    if (xe === '') delete xOpts.max; else xOpts.max = xe;
+    if (isNaN(ymin)) delete yOpts.min; else yOpts.min = ymin;
+    if (isNaN(ymax)) delete yOpts.max; else yOpts.max = ymax;
+
+    chart.update();
+  }
+
+  function onLimitChange() {
+    savePrefs();
+    applyConfiguredLimits();
+  }
+
+  xStartEl.addEventListener('change', onLimitChange);
+  xEndEl.addEventListener('change', onLimitChange);
+  yMinEl.addEventListener('change', onLimitChange);
+  yMaxEl.addEventListener('change', onLimitChange);
+  resetBtn.addEventListener('click', applyConfiguredLimits);
+  xColSel.addEventListener('change', () => {
+    xColIdx = parseInt(xColSel.value, 10);
+    savedXColName = headers[xColIdx] ?? null;
+    savePrefs();
+    if (lastContent) renderFromContent(lastContent, true);
+  });
+  yColSel.addEventListener('change', () => {
+    yColIdx = parseInt(yColSel.value, 10);
+    savedYColName = headers[yColIdx] ?? null;
+    savePrefs();
+    if (lastContent) renderFromContent(lastContent, true);
+  });
+
+  async function setFileHandle(handle) {
+    fileHandle = handle;
+    openBtn.textContent = 'Change CSV';
+    lastContent = null;
+    emptyEl.style.display = 'none';
+    try { await idbSet(handle); } catch (e) { /* ignore */ }
+    await poll();
+    startPolling();
+  }
+
+  async function tryAutoResume() {
+    try {
+      const saved = await idbGet();
+      if (!saved) return false;
+      const opts = { mode: 'read' };
+      let perm = await saved.queryPermission(opts);
+      if (perm !== 'granted') {
+        try { perm = await saved.requestPermission(opts); } catch { /* needs gesture */ }
+      }
+      if (perm === 'granted') {
+        await setFileHandle(saved);
+        return true;
+      }
+      // permission not granted silently — prompt user with a one-click resume
+      openBtn.textContent = `Resume · ${saved.name}`;
+      statusEl.textContent = `Click "Resume" to reopen ${saved.name}`;
+      statusEl.className = 'status waiting';
+      openBtn.removeEventListener('click', pickFile);
+      const resumeHandler = async () => {
+        openBtn.removeEventListener('click', resumeHandler);
+        openBtn.addEventListener('click', pickFile);
+        const p = await saved.requestPermission({ mode: 'read' });
+        if (p === 'granted') await setFileHandle(saved);
+        else pickFile();
+      };
+      openBtn.addEventListener('click', resumeHandler);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(poll, parseInt(intervalSel.value, 10));
+  }
+
+  async function poll() {
+    if (!fileHandle) return;
+    try {
+      const file = await fileHandle.getFile();
+      const text = await file.text();
+      if (text !== lastContent) {
+        lastContent = text;
+        renderFromContent(text);
+      }
+      statusEl.textContent = `Watching · ${file.name}`;
+      statusEl.className = 'status';
+    } catch (e) {
+      statusEl.textContent = 'Read error: ' + e.message;
+      statusEl.className = 'status error';
+    }
+  }
+
+  // ─────────── csv parsing ───────────
+  function parseCSV(text) {
+    const lines = text.replace(/\r\n/g, '\n').split('\n').filter(l => l.trim());
+    if (lines.length === 0) return { headers: [], rows: [] };
+
+    const delim = (lines[0].match(/\t/g) || []).length >
+                  (lines[0].match(/,/g) || []).length ? '\t' : ',';
+
+    const rows = lines.map(l =>
+      l.split(delim).map(c => c.trim().replace(/^"(.*)"$/, '$1'))
+    );
+
+    const first = rows[0];
+    const hasHeader = first.some(c => c !== '' && isNaN(parseFloat(c)));
+
+    const hdrs = hasHeader ? first : first.map((_, i) => `Col ${i}`);
+    const data = hasHeader ? rows.slice(1) : rows;
+    return { headers: hdrs, rows: data };
+  }
+
+  function renderFromContent(text, forceAxis = false) {
+    const { headers: newH, rows } = parseCSV(text);
+
+    const headersChanged = JSON.stringify(newH) !== JSON.stringify(headers);
+    if (headersChanged) {
+      headers = newH;
+      xColSel.innerHTML = headers.map((h, i) =>
+        `<option value="${i}">${escapeHtml(h)}</option>`).join('');
+      yColSel.innerHTML = headers.map((h, i) =>
+        `<option value="${i}">${escapeHtml(h)}</option>`).join('');
+
+      // Restore previously-saved column picks if those header names still exist.
+      const savedX = savedXColName != null ? headers.indexOf(savedXColName) : -1;
+      const savedY = savedYColName != null ? headers.indexOf(savedYColName) : -1;
+      xColIdx = savedX >= 0 ? savedX : 0;
+      yColIdx = savedY >= 0 ? savedY : Math.min(1, headers.length - 1);
+      xColSel.value = String(xColIdx);
+      yColSel.value = String(yColIdx);
+      savePrefs();
+    }
+
+    const maxIdx = Math.max(xColIdx, yColIdx);
+    const filtered = rows
+      .filter(r => r.length > maxIdx)
+      .map(r => ({ row: r, y: parseFloat(r[yColIdx]) }))
+      .filter(p => !isNaN(p.y));
+
+    if (filtered.length === 0) {
+      statusEl.textContent = 'No numeric data in selected Y column';
+      statusEl.className = 'status error';
+      return;
+    }
+
+    allRows = filtered.map(p => p.row);
+    const labels = filtered.map(p => p.row[xColIdx]);
+    const values = filtered.map(p => p.y);
+    updateStats(values);
+    updateChart(labels, values);
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ─────────── stats ───────────
+  function updateStats(values) {
+    const current = values[values.length - 1];
+    const fmt = x => Math.abs(x) >= 1000 ? x.toFixed(1)
+                    : Math.abs(x) >= 10  ? x.toFixed(2)
+                    : x.toFixed(3);
+
+    const cur = $('stat-current');
+    cur.textContent = fmt(current);
+    cur.className = 'stat-value ' + (current >= 0 ? 'pos' : 'neg');
+
+    $('stat-time').textContent  = new Date().toLocaleTimeString();
+  }
+
+  // ─────────── chart ───────────
+
+  const GREEN = '#22c55e';
+  const RED = '#ef4444';
+  const GREEN_FILL = 'rgba(34, 197, 94, 0.22)';
+  const RED_FILL = 'rgba(239, 68, 68, 0.22)';
+
+  function createChart() {
+    const canvas = $('chart');
+    const ctx = canvas.getContext('2d');
+
+    // Inverted wheel zoom: scroll up = zoom out, scroll down = zoom in.
+    // Zoom is focused on the cursor position.
+    canvas.addEventListener('wheel', (e) => {
+      if (!chart) return;
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const focalPoint = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      const factor = e.deltaY < 0 ? 0.92 : 1.08;
+      chart.zoom({ x: factor, y: factor }, undefined, focalPoint);
+    }, { passive: false });
+
+    chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'value',
+          data: [],
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          tension: 0,
+          borderWidth: 2,
+          // Native Chart.js two-tone fill: paints above/below the origin line.
+          fill: {
+            target: 'origin',
+            above: GREEN_FILL,
+            below: RED_FILL,
+          },
+          // Per-segment line color — green when both endpoints >= 0, else red.
+          segment: {
+            borderColor: (ctx) => {
+              const y0 = ctx.p0.parsed.y;
+              const y1 = ctx.p1.parsed.y;
+              return (y0 >= 0 && y1 >= 0) ? GREEN : RED;
+            }
+          },
+          borderColor: GREEN, // fallback for single-point / hover states
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => `${headers[xColIdx] || 'x'}: ${items[0].label}`,
+              label: (item) => `${headers[yColIdx] || 'y'}: ${item.parsed.y}`,
+              afterBody: (items) => {
+                const row = allRows[items[0].dataIndex];
+                if (!row) return [];
+                return headers
+                  .map((h, i) => ({ h, i }))
+                  .filter(({ i }) => i !== xColIdx && i !== yColIdx && i < row.length)
+                  .map(({ h, i }) => `${h}: ${row[i]}`);
+              }
+            },
+            backgroundColor: '#1e1e2a',
+            borderColor: '#3a3a4a',
+            borderWidth: 1,
+            titleColor: '#e8e8f0',
+            bodyColor: '#c8c8d8',
+            padding: 10,
+            boxPadding: 4,
+            titleFont: { weight: '600', size: 12 },
+            bodyFont: { size: 12 },
+            displayColors: false,
+          },
+          zoom: {
+            pan: {
+              enabled: true,
+              mode: 'xy',
+              modifierKey: null,
+            },
+            zoom: {
+              // wheel handled manually below so we can invert the direction
+              wheel: { enabled: false },
+              pinch: { enabled: true },
+              mode: 'xy',
+            }
+          }
+        },
+        scales: {
+          x: {
+            ticks: { color: '#606070', maxTicksLimit: 10, maxRotation: 0, autoSkip: true },
+            grid: { color: '#1e1e2a' }
+          },
+          y: {
+            ticks: { color: '#606070' },
+            grid: {
+              color: (c) => c.tick && c.tick.value === 0 ? '#6a6a7a' : '#1e1e2a',
+              lineWidth: (c) => c.tick && c.tick.value === 0 ? 2 : 1,
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function updateChart(labels, values) {
+    if (!chart) createChart();
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = values;
+    chart.update('none');
+  }
+
+  createChart();
+  applyConfiguredLimits();
+  tryAutoResume();
+</script>
+</body>
+</html>
