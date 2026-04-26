@@ -514,6 +514,10 @@
 
   // ─────────── chart ───────────
 
+  // System UI font stack — uses SF Pro on macOS, Segoe UI on Windows, etc.
+  // More legible for numerals than Chart.js's default Helvetica Neue fallback.
+  const AXIS_FONT = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, system-ui, sans-serif";
+
   const GREEN = '#22c55e';
   const RED = '#ef4444';
   const GREEN_FILL = 'rgba(34, 197, 94, 0.22)';
@@ -613,12 +617,12 @@
               display: true,
               text: '',
               color: '#d8d8e4',
-              font: { size: 13, weight: '600' },
+              font: { size: 16, weight: '600', family: AXIS_FONT },
               padding: { top: 6 },
             },
             ticks: {
               color: '#f0f0f5',
-              font: { size: 13, weight: '500' },
+              font: { size: 16, weight: '400', family: AXIS_FONT },
               maxTicksLimit: 10,
               maxRotation: 0,
               autoSkip: true,
@@ -636,11 +640,11 @@
               display: true,
               text: '',
               color: '#d8d8e4',
-              font: { size: 13, weight: '600' },
+              font: { size: 16, weight: '600', family: AXIS_FONT },
             },
             ticks: {
               color: '#f0f0f5',
-              font: { size: 13, weight: '500' },
+              font: { size: 16, weight: '400', family: AXIS_FONT },
             },
             grid: {
               color: (c) => c.tick && c.tick.value === 0 ? '#6a6a7a' : '#1e1e2a',
